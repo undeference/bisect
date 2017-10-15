@@ -1,0 +1,4 @@
+abc /* def */ ghi // "abc  ghi" but should probably be "abc ghi"
+abc   /*
+*/ghi // "abcghi" but should probably be "abc ghi"
+This /* 1 */ test /* 2 */ has /* 3 */ multiple /* 4 */ comments on the same line

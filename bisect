@@ -1,0 +1,113 @@
+#!/usr/bin/perl
+# This program is free software. You can redistribute it and/or modify it under
+# the same terms as perl itself.
+# Copyright © M. Kristall
+use strict;
+
+my (@EXEC, $PID, $STATUS);
+$SIG{CHLD} = sub {
+	$STATUS = $? >> 8;
+	warn ("$EXEC[0] exited with status $STATUS\n") if ($STATUS);
+	$PID = undef;
+	@EXEC = ();
+};
+
+sub run (@) {
+	undef ($STATUS);
+	@EXEC = @_;
+	unless ($PID = fork) {
+		# prevent warning
+		die ("exec @_ - $!\n") unless (exec (@_));
+	}
+}
+
+vec (my $v = '', fileno (STDIN), 1);
+sub prompt () {
+	my $r;
+	do {
+		print 'Did things work (y/n)? ';
+		STDOUT->flush;
+		chomp ($r = lc (<STDIN>));
+	} while ($r ne 'y' && $r ne 'n');
+	$r eq 'y';
+}
+
+sub readconf ($$) {
+	my ($obj, $lines) = @_;
+	while (my $line = $obj->getitem) {
+		push (@$lines, $line);
+	}
+	$obj->close;
+}
+
+sub writeconf ($$$$) {
+	my ($file, $lines, $start, $end) = @_;
+	die ("open '$file': $!\n") unless (open (my $fh, '>', $file));
+	for (my $i = $start; $i <= $end; $i++) {
+		print $fh $$lines[$i]->value;
+	}
+	close ($fh);
+}
+
+sub bisect ($$@) {
+	my ($file, $lines, @cmd) = @_;
+	my $low = 0;
+	my $high = @$lines;
+	while ($low < $high) {
+		my $mid = $low + int (($high - $low) / 2);
+		try:
+		writeconf ($file, $lines, $low, $mid);
+		run (@cmd) if (@cmd);
+		# not this part
+		if (prompt) {
+			$low = $mid + 1;
+		} else {
+			$high = $mid;
+		}
+		local $| = $PID;
+		print "Waiting for \"$EXEC[0]\" to exit" if ($PID);
+		wait while ($PID);
+		print "\n" if ($|);
+	}
+	$low;
+}
+
+my $OBJ;
+$SIG{INT} = sub {
+	$OBJ->restore if ($OBJ);
+	die ("Caught interrupt\n");
+};
+
+sub bifind ($@) {
+	my ($obj, @cmd) = @_;
+	my @lines;
+	readconf ($obj, \@lines);
+	$obj->backup;
+	my $n = bisect ($obj->file, \@lines, @cmd);
+	$obj->restore;
+	die ("error line not found") if ($n < 0 || $n > $#lines);
+	print "Found error ", $obj->file, ':',
+		$lines[$n]->line, " $lines[$n]\n";
+}
+
+# add various command line options
+my %opts = (
+	type => 'Line',
+	'sh-comment' => 1,
+	'c-comment' => 1,
+	'cpp-comment' => 1
+);
+my @args;
+foreach (@ARGV) {
+	if (/^--(\w+)(?:=(.*))?$/) {
+		$opts{$1} = $2;
+	} else {
+		push (@args, $_);
+	}
+}
+
+my ($file, @cmd) = @args;
+my $pkg = $opts{type};
+die ("require $pkg: ", $@ || $!, "\n") unless (do ("$pkg.pm"));
+$OBJ = $pkg->new ($file, %opts);
+bifind ($OBJ, @cmd) if ($file); #XXX
